@@ -11,7 +11,7 @@ uninstall:
 
 build:
 	rm -rf pebble
-	go build ./pebble.go
+	go build -o pebble -ldflags "-s -w" -trimpath pebble.go
 
 run:
 	go run ./pebble.go schema migrate
