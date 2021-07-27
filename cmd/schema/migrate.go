@@ -1,57 +1,102 @@
 package schema
 
 import (
-	"fmt"
-	"log"
 	"bytes"
-	"strings"
-	"io/ioutil"
 	"database/sql"
-	"pebble/utils/log"
+	"fmt"
+	"io/ioutil"
+	"log"
 	"pebble/config"
+	"pebble/types"
+	logger "pebble/utils/log"
+	parser "pebble/utils/parser/schema"
+	"strings"
+
+	schemalex "github.com/schemalex/schemalex/diff"
+
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	parser "pebble/utils/parser/schema"
-	schemalex "github.com/schemalex/schemalex/diff"
-	_ "github.com/go-sql-driver/mysql"
 )
 
 var Schema_Migrate_Command = &cobra.Command{
-	Use: "migrate",
+	Use:   "migrate",
 	Short: "Migrate schema",
-	Run: schema_migrate,
+	Run:   schema_migrate,
+}
+
+/**
+* Struct to store flags that passed to the command
+* and later assign them to the initialized values
+ */
+type Flags struct {
+	Connection string
+}
+
+var flags Flags
+
+// INIT
+func init() {
+	Schema_Migrate_Command.Flags().StringVarP(&flags.Connection, "connection", "c", "", "")
 }
 
 func schema_migrate(cmd *cobra.Command, args []string) {
 
-	/*
-		We need to initialize configuration instance to
-		query main configuration file for future usage
-	*/
-	var conf = config.Config()
-	conf_connection := conf.Sub("connection")
-	conf_schema := conf.Sub("schema")
+	/**
+	* Check if the migrating is running for default connection or
+	* or the specified connection name.
+	 */
+	var Config = config.Config()
+	var ConnectionInformation config.Connection
+	if len(flags.Connection) >= 1 {
+		var is_connection_found bool
+		for _, Connection := range Config.Connections {
+			if Connection.Alias == flags.Connection {
+				ConnectionInformation = Connection
+				is_connection_found = true
+			}
+		}
+		if !is_connection_found {
+			fmt.Println("Defined connection not found")
+			return
+		}
+	} else {
+		var is_connection_found bool
+		for _, Connection := range Config.Connections {
+			if Connection.Default {
+				ConnectionInformation = Connection
+				is_connection_found = true
+			}
+		}
+		if !is_connection_found {
+			fmt.Println("Default connection not defined")
+			return
+		}
+	}
 
-	/*
-		We need to establish database connection to
-		perform queries on the database
-	*/
-	dialect := fmt.Sprintf("%s:%s@tcp(%s:%v)/%s", conf_connection.Get("user"), conf_connection.Get("password"), conf_connection.Get("host"), conf_connection.Get("port"), conf_connection.Get("name"))
-	db, err := sql.Open(conf_connection.Get("driver").(string), dialect)
+	/**
+	* Establish new database connection to the database
+	* using configuration information provided in the
+	* main configuration file
+	 */
+	dialect := fmt.Sprintf("%s:%s@tcp(%s:%v)/%s", ConnectionInformation.User, ConnectionInformation.Password, ConnectionInformation.Host, ConnectionInformation.Port, ConnectionInformation.Name)
+	db, err := sql.Open(ConnectionInformation.Driver, dialect)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println("Database connection failed")
+		return
 	}
 	defer db.Close()
 
-	/*
-		We need to iterate through every file in the
-		migration directory to find every migration answer
-		file to operate.
-	*/
+	/**
+	* We need to iterate through every file in the
+	* migration directory to find every migration answer
+	* file to operate.
+	 */
 	var schemas []string
-	files, err := ioutil.ReadDir("./" + conf_schema.Get("dir").(string))
+	files, err := ioutil.ReadDir("./" + Config.Schema.Directory)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
+		return
 	}
 
 	for _, file := range files {
@@ -60,109 +105,107 @@ func schema_migrate(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	/*
-		We need to drop tables that are not in our schema
-		set first to clear out the unwanted tables from
-		the database.
-	*/
-	query := fmt.Sprintf("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='%s' AND TABLE_NAME NOT IN ('%s')", conf_connection.Get("name"), strings.Join(schemas, "','"))
+	/**
+	* We need to drop tables that are not in our schema
+	* set first to clear out the unwanted tables from
+	* the database.
+	 */
+	query := fmt.Sprintf("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='%s' AND TABLE_NAME NOT IN ('%s')", ConnectionInformation.Name, strings.Join(schemas, "','"))
 	rows, err := db.Query(query)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
+		return
 	}
 	defer rows.Close()
 
-	/*
-		We have the names of the tables that has no schema
-		file present in the migration store. We can safely
-		drop those tables from the database.
-	*/
+	/**
+	* We have the names of the tables that has no schema
+	* file present in the migration store. We can safely
+	* drop those tables from the database.
+	 */
 	for rows.Next() {
 		var table string
 		err := rows.Scan(&table)
 		if err != nil {
 			log.Fatal(err)
 		}
-		logger.Println("green", "[TABLE]: ", "DROPPING ( " + table + " )")
+		logger.Println("green", "[TABLE]: ", "DROPPING ( "+table+" )")
 		db.Exec("DROP TABLE " + table)
 	}
 
-
-
-	// HERE ####
-	for _, schema := range schemas {
-		fmt.Println("[TABLE]: " + schema)
-
-		type (
-			Column struct {
-				Name		string		`mapstructure:"name"`
-				Type		string		`mapstructure:"type"`
-				Nullable	bool		`mapstructure:"nullable"`
-				Primary		bool		`mapstructure:"primary"`
-				Increment	bool		`mapstructure:"increment"`
-				Collation	string		`mapstructure:"collation"`
-			}
-			Table struct {
-				Engine		string		`mapstructure:"engine"`
-				Charset		string		`mapstructure:"charset"`
-				Collation	string		`mapstructure:"collation"`
-			}
-			Structure struct {
-				Table		Table		`mapstructure:"table"`
-				Columns		[]Column	`mapstructure:"columns"`
-			}
-		)
+	/**
+	* Loop over every schema file we found in the schema directory
+	* to do the needful operations in migration schema
+	 */
+	for _, file := range schemas {
+		fmt.Println("[TABLE]: " + file)
 
 		v := viper.New()
-		v.SetConfigName(schema)
+		v.SetConfigName(file)
 		v.SetConfigType("yml")
-		v.AddConfigPath("./" + conf_schema.Get("dir").(string))
+		v.AddConfigPath("./" + Config.Schema.Directory)
 		err := v.ReadInConfig()
 		if err != nil {
 			log.Fatal(err)
 		}
-		var structure Structure
-		v.Unmarshal(&structure)
+		var Schema types.Schema
+		v.Unmarshal(&Schema)
 
-		/*
-			Check if the table is exists or not and then create
-			the table if it's not exists first.
-		*/
+		/**
+		* Check if the table is exists or not and then create
+		* the table if it's not exists first.
+		 */
 		var count int
-		query := fmt.Sprintf("SELECT CAST(COUNT(TABLE_NAME) AS UNSIGNED) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='%s' AND TABLE_NAME='%s'", conf_connection.Get("name"), schema)
+		query := fmt.Sprintf("SELECT CAST(COUNT(TABLE_NAME) AS UNSIGNED) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='%s' AND TABLE_NAME='%s'", ConnectionInformation.Name, file)
 		db.QueryRow(query).Scan(&count)
 
+		/**
+		* We need out yml schema parser to parse the provided file
+		* and output the SQL CREATE TABLE format.
+		 */
+		Parser := parser.Schema{}
+		Parser.File("./" + Config.Schema.Directory + "/" + file + ".yml")
 
-		/*
-			Here we handle the table not exists state by using the
-			table count from the last sql query and then we create new
-			table in the database according to the migration file.
-		*/
+		/**
+		* Here we handle the table not exists state by using the
+		* table count from the last sql query and then we create new
+		* table in the database according to the migration file.
+		 */
 		if count == 0 {
-			parser := parser.Schema {}
-			parser.File("./" + conf_schema.Get("dir").(string) + "/" + schema + ".yml")
-			db.Exec(parser.Statement())
+			_, err := db.Exec(Parser.Statement())
+			if err != nil {
+				fmt.Println(err)
+			}
 		}
 
-		/*
-			Depending on the recent sql query table count details we can
-			decide to modify exsisting table schema according to the
-			changes in the migration file.
-		*/
+		/**
+		* Depending on the recent sql query table count details we can
+		* decide to modify exsisting table schema according to the
+		* changes in the migration file.
+		 */
 		if count >= 1 {
 
-			parser := parser.Schema {}
-			parser.File("./" + conf_schema.Get("dir").(string) + "/" + schema + ".yml")
-
 			result := []string{"table", "ddl"}
-			db.QueryRow(fmt.Sprintf("SHOW CREATE TABLE %s", schema)).Scan(&result[0], &result[1])
+			db.QueryRow(fmt.Sprintf("SHOW CREATE TABLE %s", file)).Scan(&result[0], &result[1])
 
 			statement := &bytes.Buffer{}
-			err := schemalex.Strings(statement, result[1], parser.Statement())
-			if err != nil { log.Fatal(err) }
+			err := schemalex.Strings(statement, result[1], Parser.Statement())
+			if err != nil {
+				log.Fatal(err)
+			}
 
-			for _, stmnt := range strings.Split(statement.String(), ";") {
-				db.Exec(stmnt)
+			/**
+			* Split whole statement into seperate query and execute one
+			* by one to migrate the schema and report errors if anything
+			* happen during the process
+			 */
+			for _, query := range strings.Split(statement.String(), ";") {
+				if len(query) >= 1 {
+					_, err = db.Exec(query)
+					if err != nil {
+						fmt.Println(err)
+					}
+				}
 			}
 
 		}
