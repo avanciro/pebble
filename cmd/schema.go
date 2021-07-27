@@ -2,13 +2,14 @@ package cmd
 
 import (
 	"fmt"
+
 	"github.com/spf13/cobra"
 )
 
 var Schema_Command = &cobra.Command{
-	Use: "schema",
+	Use:   "schema",
 	Short: "Manage database schema",
-	Run: run,
+	Run:   run,
 }
 
 func run(cmd *cobra.Command, args []string) {

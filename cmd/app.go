@@ -1,18 +1,18 @@
 package cmd
 
 import (
-	"os"
 	"fmt"
+	"os"
 	"pebble/cmd/schema"
+
 	"github.com/spf13/cobra"
 )
 
 var Command = &cobra.Command{
 	Use:   "pebble",
 	Short: "Pebble is a simple DB schema management system.",
-	Run: func(cmd *cobra.Command, args []string) {},
+	Run:   func(cmd *cobra.Command, args []string) {},
 }
-
 
 func Dispatch() {
 
