@@ -1,10 +1,20 @@
-connection:
-  host: localhost
-  port: 3306
-  name: test
-  user: user
-  password: password
-  driver: mysql
+connections:
+  - alias: development
+    default: true
+    host: localhost
+    port: 3306
+    name: test
+    user: user
+    password: password
+    driver: mysql
+
+  - alias: production
+    host: localhost
+    port: 3306
+    name: test
+    user: user
+    password: password
+    driver: mysql
 
 schema:
   dir: database/schema
