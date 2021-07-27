@@ -1,11 +1,34 @@
 package config
 
 import (
-	"fmt"
+	"log"
+
 	"github.com/spf13/viper"
 )
 
-func Config() *viper.Viper {
+type (
+	Connection struct {
+		Alias    string `mapstructure:"alias"`
+		Default  bool   `mapstructure:"default"`
+		Host     string `mapstructure:"host"`
+		Port     uint64 `mapstructure:"port"`
+		Name     string `mapstructure:"name"`
+		User     string `mapstructure:"user"`
+		Password string `mapstructure:"password"`
+		Driver   string `mapstructure:"driver"`
+	}
+
+	Schema struct {
+		Directory string `mapstructure:"dir"`
+	}
+
+	Configuration struct {
+		Connections []Connection `mapstructure:"connections"`
+		Schema      Schema       `mapstructure:"schema"`
+	}
+)
+
+func Config() Configuration {
 
 	var v = viper.New()
 	v.SetConfigName("pebble")
@@ -13,8 +36,10 @@ func Config() *viper.Viper {
 	v.AddConfigPath(".")
 	err := v.ReadInConfig()
 	if err != nil {
-		panic(fmt.Errorf("Fatal error config file: %s \n", err))
+		log.Fatal(err)
 	}
+	var configuration Configuration
+	v.Unmarshal(&configuration)
 
-	return v
+	return configuration
 }
